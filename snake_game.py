@@ -1,25 +1,44 @@
 #!/usr/bin/env python3
+"""Terminal Snake game implemented with curses."""
+
 import curses
 import random
 from typing import List, Tuple
 
-
 Point = Tuple[int, int]
+DIRECTION_BY_KEY = {
+    curses.KEY_UP: (-1, 0),
+    curses.KEY_DOWN: (1, 0),
+    curses.KEY_LEFT: (0, -1),
+    curses.KEY_RIGHT: (0, 1),
+}
+MIN_HEIGHT = 10
+MIN_WIDTH = 20
+INITIAL_SPEED_MS = 110
 
 
 class SnakeGame:
+    """Runtime state and game loop for terminal Snake."""
+
     def __init__(self, stdscr: "curses._CursesWindow") -> None:
         self.stdscr = stdscr
         self.height, self.width = self.stdscr.getmaxyx()
-        self.min_height = 10
-        self.min_width = 20
+        self.min_height = MIN_HEIGHT
+        self.min_width = MIN_WIDTH
         self.snake: List[Point] = []
         self.direction: Point = (0, 1)
         self.food: Point = (0, 0)
         self.score = 0
-        self.speed_ms = 110
+        self.speed_ms = INITIAL_SPEED_MS
+        self.did_win = False
+
+    @property
+    def max_snake_length(self) -> int:
+        """Maximum number of cells the snake can occupy inside the border."""
+        return (self.height - 2) * (self.width - 2)
 
     def reset(self) -> None:
+        """Reset snake state for a new game round."""
         self.height, self.width = self.stdscr.getmaxyx()
         if self.height < self.min_height or self.width < self.min_width:
             raise ValueError("Terminal too small. Minimum size is 20x10.")
@@ -33,9 +52,14 @@ class SnakeGame:
         ]
         self.direction = (0, 1)
         self.score = 0
+        self.did_win = False
         self.food = self.spawn_food()
 
     def spawn_food(self) -> Point:
+        """Spawn food in a free playable cell."""
+        if len(self.snake) >= self.max_snake_length:
+            raise RuntimeError("No free cells left for food spawn.")
+
         while True:
             y = random.randint(1, self.height - 2)
             x = random.randint(1, self.width - 2)
@@ -56,40 +80,49 @@ class SnakeGame:
         self.stdscr.refresh()
 
     def set_direction(self, key: int) -> None:
-        mapping = {
-            curses.KEY_UP: (-1, 0),
-            curses.KEY_DOWN: (1, 0),
-            curses.KEY_LEFT: (0, -1),
-            curses.KEY_RIGHT: (0, 1),
-        }
-        if key not in mapping:
+        """Apply direction change if key maps to a non-opposite move."""
+        if key not in DIRECTION_BY_KEY:
             return
 
-        next_direction = mapping[key]
-        if (next_direction[0] == -self.direction[0] and next_direction[1] == -self.direction[1]):
+        next_direction = DIRECTION_BY_KEY[key]
+        if next_direction[0] == -self.direction[0] and next_direction[1] == -self.direction[1]:
             return
         self.direction = next_direction
 
     def tick(self) -> bool:
+        """Advance game state one frame.
+
+        Returns False when the game round ends due to collision or board fill.
+        """
         head_y, head_x = self.snake[0]
         dy, dx = self.direction
         new_head = (head_y + dy, head_x + dx)
+        will_grow = new_head == self.food
 
-        hit_wall = new_head[0] <= 0 or new_head[0] >= self.height - 1 or new_head[1] <= 0 or new_head[1] >= self.width - 1
-        hit_self = new_head in self.snake
+        hit_wall = (
+            new_head[0] <= 0
+            or new_head[0] >= self.height - 1
+            or new_head[1] <= 0
+            or new_head[1] >= self.width - 1
+        )
+        body_to_check = self.snake if will_grow else self.snake[:-1]
+        hit_self = new_head in body_to_check
         if hit_wall or hit_self:
             return False
 
         self.snake.insert(0, new_head)
-        if new_head == self.food:
+        if will_grow:
             self.score += 1
+            if len(self.snake) >= self.max_snake_length:
+                self.did_win = True
+                return False
             self.food = self.spawn_food()
         else:
             self.snake.pop()
         return True
 
     def game_over_screen(self) -> str:
-        msg1 = "GAME OVER"
+        msg1 = "YOU WIN" if self.did_win else "GAME OVER"
         msg2 = f"Final Score: {self.score}"
         msg3 = "Press R to restart or Q to quit"
 
@@ -141,7 +174,7 @@ def main(stdscr: "curses._CursesWindow") -> None:
     game = SnakeGame(stdscr)
     try:
         game.run()
-    except ValueError as err:
+    except (RuntimeError, ValueError) as err:
         stdscr.clear()
         stdscr.addstr(0, 0, str(err))
         stdscr.addstr(2, 0, "Resize the terminal and try again.")
